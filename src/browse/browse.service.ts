@@ -1,6 +1,7 @@
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { Injectable } from '@nestjs/common';
+import { SolrResponse } from '../models/solr-response.interface';
 
 @Injectable()
 export class BrowseService {
@@ -10,15 +11,16 @@ export class BrowseService {
 
   constructor(private readonly httpService: HttpService) {}
 
-  async search(q: string) {
+  async search(q: string, start: number, rows: number, filters?: string[]) {
     const response = await firstValueFrom(
-      this.httpService.get(
-        `http://${this.host}:${this.port}/solr/${this.core}/browse?q=${q}`,
+      this.httpService.get<SolrResponse>(
+        `http://${this.host}:${this.port}/solr/${this.core}/browse?q=${q}&start=${start}&rows=${rows}${filters ? `&fq=${filters.join('&fq=')}` : ''}&hl.simple.pre=<em>&hl.simple.post=</em>`,
       ),
     );
-    console.log(
-      `http://${this.host}:${this.port}/solr/${this.core}/browse?q=${q}`,
-    );
-    return response.data;
+    if (response.status !== 200) {
+      throw new Error('Failed to fetch data from Solr');
+    }
+    const data: SolrResponse = response.data;
+    return data;
   }
 }
