@@ -97,9 +97,7 @@ export class BrowseController {
         @Query('filters') filters: string[],
     ): Promise<SearchResult> {
         try {
-            console.log(`${query} - ${start} - ${rows} PRE 1`);
             query = query.replace(/(PGNC:\d+)/g, '"$&"');
-            console.log(`${query} - ${start} - ${rows} PRE 2`);
             const res = await this.browseService.search(
                 query,
                 start,
@@ -119,7 +117,6 @@ export class BrowseController {
             );
             return result;
         } catch (err) {
-            console.error(err);
             throw err;
         }
     }
