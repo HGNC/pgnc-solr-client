@@ -6,4 +6,6 @@ export default Joi.object({
   SOLR_HOST: Joi.string().required(),
   SOLR_PORT: Joi.number().required(),
   SOLR_CORE: Joi.string().required(),
+  SOLR_USERNAME: Joi.string().required(),
+  SOLR_PASSWORD: Joi.string().required(),
 });
