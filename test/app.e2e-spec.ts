@@ -1,25 +1,50 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
-import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
+import { BrowseController } from '../src/browse/browse.controller';
+import { BrowseService } from '../src/browse/browse.service';
 
-describe('AppController (e2e)', () => {
-  let app: INestApplication<App>;
+describe('Browse endpoint (e2e)', () => {
+  let app: INestApplication;
 
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
+      controllers: [BrowseController],
+      providers: [
+        {
+          provide: BrowseService,
+          useValue: {
+            search: jest.fn().mockResolvedValue({
+              response: {
+                docs: [],
+                numFound: 0,
+                start: 0,
+              },
+              highlighting: {},
+            }),
+          },
+        },
+      ],
     }).compile();
 
     app = moduleFixture.createNestApplication();
     await app.init();
   });
 
-  it('/ (GET)', () => {
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('/browse (GET)', () => {
     return request(app.getHttpServer())
-      .get('/')
+      .get('/browse?q=test')
       .expect(200)
-      .expect('Hello World!');
+      .expect((res) => {
+        expect(res.body).toHaveProperty('genes');
+        expect(res.body).toHaveProperty('total');
+        expect(res.body).toHaveProperty('start');
+        expect(res.body).toHaveProperty('rows');
+        expect(Array.isArray(res.body.genes)).toBe(true);
+      });
   });
 });
