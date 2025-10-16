@@ -120,16 +120,6 @@ jobs:
 
           trigger_type="${event}"
 
-            if [ -n "${explicit_version}" ]; then
-              echo "::notice::Explicit version override requested: ${explicit_version}"
-            fi
-            echo "::notice::Release trigger=${trigger_type}, release_type=${release_type_lower}, confirm_major=${confirm_major}"
-            if [ -n "${notes_override}" ]; then
-              echo "::notice::Manual release notes override supplied (${#notes_override} chars)."
-            else
-              echo "::notice::Using auto-generated release notes."
-            fi
-
           {
             printf 'release_type=%s\n' "${release_type_lower}"
             printf 'explicit_version=%s\n' "${explicit_version}"
@@ -157,10 +147,8 @@ jobs:
                 echo "::error::Release branch ${branch} is behind origin/${branch} by ${behind} commit(s). Update the branch before releasing." >&2
                 exit 1
               fi
-              echo "::notice::Release branch ${branch} is up-to-date with origin/${branch}."
               ;;
             *)
-              echo "::notice::Reference ${ref} is not a branch; skipping repository state validation."
               ;;
           esac
 
@@ -171,7 +159,6 @@ jobs:
           GH_TOKEN_FROM_CONTEXT: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "::notice::Evaluating repository permissions: ${PERMISSIONS:-unknown}"
           token="${GH_TOKEN_FROM_SECRET:-${GH_TOKEN_FROM_CONTEXT:-}}"
           if [ -z "${token}" ]; then
             echo "::error::No GitHub token detected from secrets.GH_PAT or github.token." >&2
@@ -189,12 +176,7 @@ jobs:
           packages_value="${PACKAGES_SCOPE:-}" || packages_value=""
           contents_value="${CONTENTS_SCOPE:-}" || contents_value=""
 
-          echo "::notice::GITHUB_TOKEN packages permission: ${packages_value:-unknown}"
-          echo "::notice::GITHUB_TOKEN contents permission: ${contents_value:-unknown}"
-
-          if [ "${GH_PAT_PRESENT}" = "true" ]; then
-            echo "::notice::GH_PAT secret is configured; using it for authenticated operations."
-          elif [ "${packages_value}" != "write" ] || [ "${contents_value}" != "write" ]; then
+          if [ "${GH_PAT_PRESENT}" != "true" ] && { [ "${packages_value}" != "write" ] || [ "${contents_value}" != "write" ]; }; then
             echo "::warning::GITHUB_TOKEN may lack packages:write/contents:write scopes (packages='${packages_value:-unknown}', contents='${contents_value:-unknown}')." \
               "Configure a GH_PAT repository secret with required scopes, or confirm Settings → Actions → Workflow permissions is set to 'Read and write'."
           fi
@@ -222,7 +204,6 @@ jobs:
             exit 0
           fi
 
-          echo "::notice::Repository viewer permission for token: ${permission}"
           case "${permission}" in
             ADMIN|WRITE)
               ;;
@@ -274,7 +255,6 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${IS_BOOTSTRAP}" = "true" ] || [ -z "${PREVIOUS}" ]; then
-            echo "::notice::Bootstrap release detected; skipping version progression checks."
             exit 0
           fi
           prev_stripped="${PREVIOUS#v}"
@@ -287,11 +267,8 @@ jobs:
             echo "::error::Next version ${NEXT} must be greater than previous release ${PREVIOUS}." >&2
             exit 1
           fi
-          echo "::notice::Validated version progression from ${PREVIOUS} to ${NEXT}."
 
-      - name: Log version details
-        run: |
-          echo "::notice::Resolved version ${{ steps.version.outputs.next_version }} (strategy=${{ steps.version.outputs.release_strategy }}, bootstrap=${{ steps.version.outputs.is_bootstrap }})"
+
 
   dump_version_outputs:
     name: Dump calculate_version outputs
@@ -415,7 +392,6 @@ jobs:
 
           release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${VERSION}"
           printf 'release_url=%s\n' "${release_url}" >>"${GITHUB_OUTPUT}"
-          echo "::notice::Release available at ${release_url}"
           rm -f "${notes_file}"
 
   build_and_push:
@@ -471,7 +447,6 @@ jobs:
             "/orgs/${OWNER}/packages/container/${PACKAGE}/versions?per_page=100" 2>err.log || true)
           if [ -s err.log ]; then
             if grep -q '404' err.log; then
-              echo "::notice::No existing GHCR package for ${OWNER}/${PACKAGE}; skipping cleanup."
               rm -f err.log
               echo "::endgroup::"
               exit 0
@@ -488,10 +463,7 @@ jobs:
             while IFS= read -r id; do
               [ -z "${id}" ] && continue
               gh api -X DELETE "/orgs/${OWNER}/packages/container/${PACKAGE}/versions/${id}"
-              echo "::notice::Removed GHCR package version ${id} tagged ${VERSION}."
             done <<<"${ids}"
-          else
-            echo "::notice::No conflicting GHCR tags detected for ${VERSION}."
           fi
           echo "::endgroup::"
 
@@ -552,7 +524,6 @@ jobs:
             echo "::error::Missing tags:${missing}" >&2
             exit 1
           fi
-          echo "::notice::All expected container tags are present: ${required_tags}"
 
       - name: Record image metadata
         id: image_info
@@ -571,7 +542,6 @@ jobs:
             size=0
           fi
           printf 'size_bytes=%s\n' "${size}" >>"${GITHUB_OUTPUT}"
-          echo "::notice::Image size for ${IMAGE_REF}: ${size} bytes"
 
       - name: Capture build duration
         id: duration
@@ -635,10 +605,7 @@ jobs:
           - ${IMAGE_REPOSITORY}:release
           EOF
 
-      - name: Emit pipeline metrics
-        run: |
-          echo "::notice::Build completed in ${{ steps.duration.outputs.seconds }}s with digest ${{ steps.build.outputs.digest }}"
-          echo "::notice::Image size: ${{ steps.image_info.outputs.size_bytes }} bytes"
+
 
   finalize:
     name: Finalize Pipeline
@@ -676,7 +643,6 @@ jobs:
             echo "::error::Release tag ${release_tag} does not match expected ${VERSION}." >&2
             exit 1
           fi
-          echo "::notice::Verified release ${release_tag} for image ${IMAGE_TAG}."
 
       - name: Display workflow outputs
         run: |
