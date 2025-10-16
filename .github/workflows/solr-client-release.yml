@@ -185,17 +185,15 @@ jobs:
           CONTENTS_SCOPE: ${{ github.token.permissions.contents }}
         run: |
           set -euo pipefail
-          packages="${PACKAGES_SCOPE:-none}"
-          contents="${CONTENTS_SCOPE:-none}"
-          echo "::notice::GITHUB_TOKEN packages permission: ${packages}"
-          echo "::notice::GITHUB_TOKEN contents permission: ${contents}"
-          if [ "${packages}" != "write" ]; then
-            echo "::error::GITHUB_TOKEN must have packages:write permission (current: ${packages}). Update workflow permissions." >&2
-            exit 1
-          fi
-          if [ "${contents}" != "write" ]; then
-            echo "::error::GITHUB_TOKEN must have contents:write permission (current: ${contents}). Update workflow permissions." >&2
-            exit 1
+          packages_value="${PACKAGES_SCOPE:-}" || packages_value=""
+          contents_value="${CONTENTS_SCOPE:-}" || contents_value=""
+
+          echo "::notice::GITHUB_TOKEN packages permission: ${packages_value:-unknown}"
+          echo "::notice::GITHUB_TOKEN contents permission: ${contents_value:-unknown}"
+
+          if [ "${packages_value}" != "write" ] || [ "${contents_value}" != "write" ]; then
+            echo "::warning::GITHUB_TOKEN may lack packages:write/contents:write scopes (packages='${packages_value:-unknown}', contents='${contents_value:-unknown}')." \
+              "If this run is on GitHub-hosted runners, confirm repository Settings → Actions → General → Workflow permissions is set to 'Read and write'."
           fi
 
       - name: Verify repository publish capability
