@@ -532,8 +532,14 @@ jobs:
         run: |
           set -euo pipefail
           required_tags="${VERSION} latest release"
-          # Normalize metadata to an array of tag strings
-          tags=$(printf '%s' "${METADATA}" | jq -sr '[.[].tag]')
+          # Extract image.name and parse tags from full image references
+          image_names=$(printf '%s' "${METADATA}" | jq -r '."image.name" // ""')
+          if [ -z "${image_names}" ]; then
+            echo "::error::No image.name found in build metadata." >&2
+            exit 1
+          fi
+          # Convert comma-separated full refs to just tag names
+          tags=$(printf '%s' "${image_names}" | tr ',' '\n' | sed 's/.*://' | jq -R . | jq -s .)
           missing=""
           for tag in ${required_tags}; do
             present=$(printf '%s' "${tags}" | jq --arg tag "${tag}" 'map(select(. == $tag)) | length > 0')
