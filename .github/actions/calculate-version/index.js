@@ -94,6 +94,8 @@ function setOutput(name, value) {
 
 async function main() {
   const token = (process.env.GITHUB_TOKEN || '').trim();
+  const tokenPresent = Boolean(token);
+  console.log(`[calculate-version] GITHUB_TOKEN present=${tokenPresent}`);
   if (!token) {
     throw new Error('GITHUB_TOKEN is required for calculate-version action.');
   }
@@ -103,15 +105,19 @@ async function main() {
   if (!owner || !repo) {
     throw new Error(`Unable to determine repository owner/name from GITHUB_REPOSITORY: ${repoSlug}`);
   }
+  console.log(`[calculate-version] repository=${owner}/${repo}`);
 
   const apiBase = ((process.env.GITHUB_API_URL || 'https://api.github.com').trim() || 'https://api.github.com')
     .replace(/\/$/, '');
+  console.log(`[calculate-version] apiBase=${apiBase}`);
 
   const releaseType = process.env.RELEASE_TYPE || '';
   const explicitVersion = process.env.EXPLICIT_VERSION || '';
 
   const tags = await fetchTags({ owner, repo, token, apiBase });
+  console.log(`[calculate-version] fetched ${Array.isArray(tags) ? tags.length : 0} tags`);
   const latestTag = findLatestSemverTag(tags);
+  console.log(`[calculate-version] latest semantic tag=${latestTag}`);
 
   const result = resolveNextVersion({
     currentTag: latestTag,

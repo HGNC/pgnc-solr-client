@@ -167,3 +167,34 @@ GitHub Actions run → *Summary* tab. Includes resolved version, overrides, imag
 ---
 
 _Last reviewed: 2025-10-15. Update this document whenever workflow inputs, versioning rules, or release processes change._
+
+## Appendix A — Creating a GitHub Personal Access Token (PAT) for CI
+
+If your organization restricts workflow permissions or you need a token with broader scopes, create a repository secret named `GH_PAT` and give the token the minimum required scopes.
+
+1. Create the PAT
+  - Visit: https://github.com/settings/tokens
+  - Click **Generate new token** → **Generate new token (classic)** (or the relevant PAT UI for your org).
+  - Give the token a descriptive name (e.g., `ci/solr-client-release`).
+  - Expiry: choose an appropriate expiry or rotate regularly.
+  - Scopes to enable (minimum recommended):
+    - repo (if the repo is private or you need repo-level write access) — or more specifically: repo:status, repo_deployment, public_repo (as appropriate)
+    - packages: write — required to publish / remove GHCR package versions
+    - workflow (if you need to manage workflows from the token)
+    - contents: write — to create tags/releases when required
+
+  - Generate the token and copy it (you won't be able to view it again).
+
+2. Store the token as a repository secret
+  - Go to your repository → Settings → Secrets and variables → Actions → New repository secret.
+  - Name the secret: `GH_PAT` (the workflow expects this name; it will fall back to `${{ github.token }}` if the secret is missing).
+  - Paste the token and save.
+
+3. Validate the secret in a workflow run
+  - Re-run the `Solr Client Release` workflow (from Actions → Solr Client Release → Run workflow). The pipeline will prefer `secrets.GH_PAT` when present and will print diagnostic messages from `calculate-version` about token presence.
+
+Security notes
+ - Use the least-privilege scope required for your automation. If publishing to GHCR is not necessary, avoid granting `packages: write`.
+ - Rotate PATs periodically and remove unused tokens.
+ - Prefer repository-scoped or organization-scoped secrets and avoid storing PATs in user accounts.
+
