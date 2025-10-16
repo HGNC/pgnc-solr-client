@@ -462,7 +462,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           OWNER: ${{ github.repository_owner }}
-          PACKAGE: solr-client
+          PACKAGE: pgnc-solr-client
           VERSION: ${{ needs.calculate_version.outputs.next_version }}
         run: |
           set -euo pipefail
@@ -504,10 +504,10 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: ./solr-client
-          file: ./solr-client/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: true
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           tags: |
             ${{ env.IMAGE_REPOSITORY }}:${{ needs.calculate_version.outputs.next_version }}
             ${{ env.IMAGE_REPOSITORY }}:latest
