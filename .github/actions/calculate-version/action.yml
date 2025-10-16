@@ -16,18 +16,24 @@ inputs:
 outputs:
   next_version:
     description: Resolved next semantic version tag (prefixed with v).
+    value: ${{ steps.resolve.outputs.next_version }}
   is_bootstrap:
     description: 'true when the repository has no existing semantic tags.'
+    value: ${{ steps.resolve.outputs.is_bootstrap }}
   previous_version:
     description: Latest semantic tag discovered before calculation, if any.
+    value: ${{ steps.resolve.outputs.previous_version }}
   release_strategy:
     description: Source of the version decision (bootstrap, auto, explicit).
+    value: ${{ steps.resolve.outputs.release_strategy }}
   resolved_release_type:
     description: Bump type used for calculation after overrides are considered.
+    value: ${{ steps.resolve.outputs.resolved_release_type }}
 runs:
   using: composite
   steps:
     - name: Resolve next version
+      id: resolve
       shell: bash
       env:
         INPUT_RELEASE_TYPE: ${{ inputs.release_type }}
