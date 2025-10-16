@@ -656,14 +656,18 @@ jobs:
       image_size_bytes: ${{ steps.set_outputs.outputs.image_size_bytes }}
       build_duration_seconds: ${{ steps.set_outputs.outputs.build_duration_seconds }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Verify release and image alignment
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           VERSION: ${{ needs.calculate_version.outputs.next_version }}
           IMAGE_TAG: ${{ env.IMAGE_REPOSITORY }}:${{ needs.calculate_version.outputs.next_version }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          release_tag=$(gh release view "${VERSION}" --json tagName --jq '.tagName')
+          release_tag=$(gh release view "${VERSION}" --repo "${REPOSITORY}" --json tagName --jq '.tagName')
           if [ -z "${release_tag}" ]; then
             echo "::error::Unable to retrieve release tag for ${VERSION}." >&2
             exit 1
