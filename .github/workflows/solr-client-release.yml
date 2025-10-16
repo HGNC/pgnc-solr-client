@@ -171,11 +171,13 @@ jobs:
           GH_TOKEN_FROM_CONTEXT: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "::notice::Evaluating repository permissions: ${PERMISSIONS}"
-          if [ -z "${GITHUB_TOKEN:-}" ]; then
-            echo "GITHUB_TOKEN must be available for workflow execution" >&2
+          echo "::notice::Evaluating repository permissions: ${PERMISSIONS:-unknown}"
+          token="${GH_TOKEN_FROM_SECRET:-${GH_TOKEN_FROM_CONTEXT:-}}"
+          if [ -z "${token}" ]; then
+            echo "::error::No GitHub token detected from secrets.GITHUB_TOKEN or github.token." >&2
             exit 1
           fi
+          export GITHUB_TOKEN="${token}"
 
       - name: Validate token scopes for publishing
         env:
