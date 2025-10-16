@@ -167,6 +167,8 @@ jobs:
       - name: Pre-flight permission checks
         env:
           PERMISSIONS: ${{ toJson(github.event.repository.permissions) }}
+          GH_TOKEN_FROM_SECRET: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN_FROM_CONTEXT: ${{ github.token }}
         run: |
           set -euo pipefail
           echo "::notice::Evaluating repository permissions: ${PERMISSIONS}"
