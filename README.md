@@ -110,6 +110,26 @@ The Docker image executes `npm run start:prod`, which serves the compiled TypeSc
 - Keep `SOLR_*` credentials consistent with the `solr` service; update `.env` once and rebuild both images when rotating secrets.
 - For feature additions (faceting, new endpoints), extend the `BrowseModule` or add new Nest modules while reusing the existing configuration scaffolding.
 
+## Release & Deployment Documentation
+
+Comprehensive documentation for the automated release pipeline and production deployment processes:
+
+### Release Pipeline
+- **[Release Pipeline Guide](./docs/release-pipeline.md)** – Complete overview of the automated release workflow, including triggers, version calculation, and override options
+- **[Test Scenarios](./docs/test-scenarios.md)** – 42 comprehensive test cases covering version calculation, release creation, Docker builds, failure recovery, and edge cases
+- **[Staging Environment Setup](./docs/staging-environment-setup.md)** – Guide for setting up isolated testing environments with multiple deployment options
+
+### Production Deployment
+- **[Deployment Checklist & Runbook](./docs/deployment-checklist-runbook.md)** – Step-by-step production deployment procedures, verification steps, rollback plans, and operational runbooks for hotfixes, blue-green deployments, and emergency scenarios
+- **[Failure Scenarios & Recovery](./docs/failure-scenarios-recovery.md)** – Comprehensive guide to identifying, testing, and recovering from 10+ failure categories including infrastructure, authentication, build, and concurrency issues
+- **[Monitoring & Alerting Setup](./docs/monitoring-alerting-setup.md)** – Complete monitoring architecture with alert definitions, metrics collection, dashboards, notification channels, SLA/SLO definitions, and incident response integration
+
+### Quick Links
+- **New Release**: Push to `release` branch or use manual `workflow_dispatch` trigger
+- **View Releases**: [GitHub Releases](https://github.com/HGNC/pgnc-solr-client/releases)
+- **Container Images**: [GHCR Repository](https://github.com/HGNC/pgnc-solr-client/pkgs/container/pgnc-solr-client)
+- **Workflow Status**: [GitHub Actions](https://github.com/HGNC/pgnc-solr-client/actions/workflows/solr-client-release.yml)
+
 ## License
 
-This component inherits the repository’s AGPL-3.0 license; see the root `LICENSE` file for terms.
+This component inherits the repository's AGPL-3.0 license; see the root `LICENSE` file for terms.
