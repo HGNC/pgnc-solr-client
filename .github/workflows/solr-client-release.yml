@@ -183,6 +183,7 @@ jobs:
         env:
           PACKAGES_SCOPE: ${{ github.token.permissions.packages }}
           CONTENTS_SCOPE: ${{ github.token.permissions.contents }}
+          GH_PAT_PRESENT: ${{ secrets.GH_PAT != '' }}
         run: |
           set -euo pipefail
           packages_value="${PACKAGES_SCOPE:-}" || packages_value=""
@@ -191,9 +192,11 @@ jobs:
           echo "::notice::GITHUB_TOKEN packages permission: ${packages_value:-unknown}"
           echo "::notice::GITHUB_TOKEN contents permission: ${contents_value:-unknown}"
 
-          if [ "${packages_value}" != "write" ] || [ "${contents_value}" != "write" ]; then
+          if [ "${GH_PAT_PRESENT}" = "true" ]; then
+            echo "::notice::GH_PAT secret is configured; using it for authenticated operations."
+          elif [ "${packages_value}" != "write" ] || [ "${contents_value}" != "write" ]; then
             echo "::warning::GITHUB_TOKEN may lack packages:write/contents:write scopes (packages='${packages_value:-unknown}', contents='${contents_value:-unknown}')." \
-              "If this run is on GitHub-hosted runners, confirm repository Settings → Actions → General → Workflow permissions is set to 'Read and write'."
+              "Configure a GH_PAT repository secret with required scopes, or confirm Settings → Actions → Workflow permissions is set to 'Read and write'."
           fi
 
       - name: Verify repository publish capability
