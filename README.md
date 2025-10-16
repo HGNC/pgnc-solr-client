@@ -63,24 +63,7 @@ curl "http://localhost:${LOCALHOST_SOLR_CLIENT_PORT:-3000}/browse" \
 
 ## Local Development
 
-```bash
-cd solr-client
-
-# Install dependencies
-npm install
-
-# Ensure ../.env is populated, then start in watch mode
-npm run start:dev
-
-# Run unit tests
-npm test
-
-# Lint / format
-npm run lint
-npm run format
-```
-
-During development the service expects a reachable Solr instance. You can run `docker compose up solr solr-client` from the repository root to spin up Solr alongside the client, or point the environment variables at an existing stack.
+Development should not be done on this branch, please use the main branch.
 
 ## Production Build
 
