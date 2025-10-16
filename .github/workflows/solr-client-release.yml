@@ -39,7 +39,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_REPOSITORY: ghcr.io/hgnc/solr-client
+  IMAGE_REPOSITORY: ghcr.io/hgnc/pgnc-solr-client
 
 jobs:
   validate_inputs:
