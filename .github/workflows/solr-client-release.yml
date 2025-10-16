@@ -1,0 +1,629 @@
+name: Solr Client Release
+
+on:
+  push:
+    branches:
+      - release
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Optional semantic bump override"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+        required: false
+      explicit_version:
+        description: "Optional explicit semantic version (vX.Y.Z)"
+        type: string
+        required: false
+      confirm_major:
+        description: "Acknowledge major release when release_type=major"
+        type: boolean
+        default: false
+        required: false
+      notes_override:
+        description: "Optional manual release notes markdown"
+        type: string
+        required: false
+
+concurrency:
+  group: solr-client-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_REPOSITORY: ghcr.io/hgnc/solr-client
+
+jobs:
+  validate_inputs:
+    name: Validate Inputs & Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      release_type: ${{ steps.evaluate.outputs.release_type }}
+      explicit_version: ${{ steps.evaluate.outputs.explicit_version }}
+      notes_override: ${{ steps.evaluate.outputs.notes_override }}
+      trigger_type: ${{ steps.evaluate.outputs.trigger_type }}
+      notes_override_state: ${{ steps.evaluate.outputs.notes_override_state }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Ensure required action exists
+        run: |
+          set -euo pipefail
+          if [ ! -f ".github/actions/calculate-version/action.yml" ]; then
+            echo "Required calculate-version action is missing" >&2
+            exit 1
+          fi
+
+      - name: Validate trigger context
+        id: evaluate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          INPUT_RELEASE_TYPE: ${{ github.event.inputs.release_type }}
+          INPUT_EXPLICIT_VERSION: ${{ github.event.inputs.explicit_version }}
+          INPUT_CONFIRM_MAJOR: ${{ github.event.inputs.confirm_major }}
+          INPUT_NOTES_OVERRIDE: ${{ github.event.inputs.notes_override }}
+        run: |
+          set -euo pipefail
+
+          event="${EVENT_NAME}"
+          ref="${REF}"
+
+          if [ "${event}" = "push" ] && [ "${ref}" != "refs/heads/release" ]; then
+            echo "This workflow only supports pushes to the release branch." >&2
+            exit 1
+          fi
+
+          release_type="${INPUT_RELEASE_TYPE:-}"
+          explicit_version="${INPUT_EXPLICIT_VERSION:-}"
+          confirm_major="${INPUT_CONFIRM_MAJOR:-false}"
+          notes_override="${INPUT_NOTES_OVERRIDE:-}"
+
+          if [ -z "${release_type}" ]; then
+            release_type="patch"
+          fi
+
+          release_type_lower=$(printf '%s' "${release_type}" | tr '[:upper:]' '[:lower:]')
+          case "${release_type_lower}" in
+            major|minor|patch)
+              ;;
+            *)
+              echo "Unsupported release_type: ${release_type}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "${release_type_lower}" = "major" ] && [ "${confirm_major}" != "true" ]; then
+            echo "Major releases require confirm_major=true." >&2
+            exit 1
+          fi
+
+          if [ -n "${explicit_version}" ]; then
+            if ! printf '%s' "${explicit_version}" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "explicit_version must match vX.Y.Z" >&2
+              exit 1
+            fi
+            # normalise to v prefix
+            explicit_version="v$(printf '%s' "${explicit_version}" | sed 's/^v//')"
+          fi
+
+          trigger_type="${event}"
+
+            if [ -n "${explicit_version}" ]; then
+              echo "::notice::Explicit version override requested: ${explicit_version}"
+            fi
+            echo "::notice::Release trigger=${trigger_type}, release_type=${release_type_lower}, confirm_major=${confirm_major}"
+            if [ -n "${notes_override}" ]; then
+              echo "::notice::Manual release notes override supplied (${#notes_override} chars)."
+            else
+              echo "::notice::Using auto-generated release notes."
+            fi
+
+          {
+            printf 'release_type=%s\n' "${release_type_lower}"
+            printf 'explicit_version=%s\n' "${explicit_version}"
+            printf 'notes_override<<__NOTE__\n%s\n__NOTE__\n' "${notes_override}"
+            printf 'trigger_type=%s\n' "${trigger_type}"
+              if [ -n "${notes_override}" ]; then
+                printf 'notes_override_state=true\n'
+              else
+                printf 'notes_override_state=false\n'
+              fi
+          } >>"${GITHUB_OUTPUT}"
+
+      - name: Validate repository state
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          ref="${REF}"
+          case "${ref}" in
+            refs/heads/*)
+              branch="${ref#refs/heads/}"
+              git fetch origin "${branch}" --depth=1
+              behind=$(git rev-list --count HEAD..origin/"${branch}")
+              if [ "${behind}" -gt 0 ]; then
+                echo "::error::Release branch ${branch} is behind origin/${branch} by ${behind} commit(s). Update the branch before releasing." >&2
+                exit 1
+              fi
+              echo "::notice::Release branch ${branch} is up-to-date with origin/${branch}."
+              ;;
+            *)
+              echo "::notice::Reference ${ref} is not a branch; skipping repository state validation."
+              ;;
+          esac
+
+      - name: Pre-flight permission checks
+        env:
+          PERMISSIONS: ${{ toJson(github.event.repository.permissions) }}
+        run: |
+          set -euo pipefail
+          echo "::notice::Evaluating repository permissions: ${PERMISSIONS}"
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            echo "GITHUB_TOKEN must be available for workflow execution" >&2
+            exit 1
+          fi
+
+      - name: Validate token scopes for publishing
+        env:
+          PACKAGES_SCOPE: ${{ github.token.permissions.packages }}
+          CONTENTS_SCOPE: ${{ github.token.permissions.contents }}
+        run: |
+          set -euo pipefail
+          packages="${PACKAGES_SCOPE:-none}"
+          contents="${CONTENTS_SCOPE:-none}"
+          echo "::notice::GITHUB_TOKEN packages permission: ${packages}"
+          echo "::notice::GITHUB_TOKEN contents permission: ${contents}"
+          if [ "${packages}" != "write" ]; then
+            echo "::error::GITHUB_TOKEN must have packages:write permission (current: ${packages}). Update workflow permissions." >&2
+            exit 1
+          fi
+          if [ "${contents}" != "write" ]; then
+            echo "::error::GITHUB_TOKEN must have contents:write permission (current: ${contents}). Update workflow permissions." >&2
+            exit 1
+          fi
+
+      - name: Verify repository publish capability
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          permission=$(gh api graphql -F owner="${OWNER}" -F repo="${REPO}" -f query='query($owner:String!, $repo:String!){ repository(owner:$owner, name:$repo) { viewerPermission } }' --jq '.data.repository.viewerPermission')
+          echo "::notice::Repository viewer permission for token: ${permission}"
+          case "${permission}" in
+            ADMIN|WRITE)
+              ;;
+            *)
+              echo "::error::GITHUB_TOKEN lacks write access to ${OWNER}/${REPO} (permission: ${permission}). Package publishing requires write access." >&2
+              echo "::error::Review repository package publishing settings and ensure actions can publish to GHCR." >&2
+              exit 1
+              ;;
+          esac
+
+  calculate_version:
+    name: Calculate Version
+    runs-on: ubuntu-latest
+    needs: validate_inputs
+    outputs:
+      next_version: ${{ steps.version.outputs.next_version }}
+      is_bootstrap: ${{ steps.version.outputs.is_bootstrap }}
+      previous_version: ${{ steps.version.outputs.previous_version }}
+      release_strategy: ${{ steps.version.outputs.release_strategy }}
+      resolved_release_type: ${{ steps.version.outputs.resolved_release_type }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Calculate next version
+        id: version
+        uses: ./.github/actions/calculate-version
+        with:
+          release_type: ${{ needs.validate_inputs.outputs.release_type }}
+          explicit_version: ${{ needs.validate_inputs.outputs.explicit_version }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate version progression
+        env:
+          PREVIOUS: ${{ steps.version.outputs.previous_version }}
+          NEXT: ${{ steps.version.outputs.next_version }}
+          IS_BOOTSTRAP: ${{ steps.version.outputs.is_bootstrap }}
+        run: |
+          set -euo pipefail
+          if [ "${IS_BOOTSTRAP}" = "true" ] || [ -z "${PREVIOUS}" ]; then
+            echo "::notice::Bootstrap release detected; skipping version progression checks."
+            exit 0
+          fi
+          prev_stripped="${PREVIOUS#v}"
+          next_stripped="${NEXT#v}"
+          if [ "${next_stripped}" = "${prev_stripped}" ]; then
+            echo "::error::Next version ${NEXT} matches previous release ${PREVIOUS}. Bump the version before releasing." >&2
+            exit 1
+          fi
+          if ! dpkg --compare-versions "${next_stripped}" gt "${prev_stripped}"; then
+            echo "::error::Next version ${NEXT} must be greater than previous release ${PREVIOUS}." >&2
+            exit 1
+          fi
+          echo "::notice::Validated version progression from ${PREVIOUS} to ${NEXT}."
+
+      - name: Log version details
+        run: |
+          echo "::notice::Resolved version ${{ steps.version.outputs.next_version }} (strategy=${{ steps.version.outputs.release_strategy }}, bootstrap=${{ steps.version.outputs.is_bootstrap }})"
+
+  create_release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: calculate_version
+    outputs:
+      release_url: ${{ steps.publish.outputs.release_url }}
+      notes_source: ${{ steps.notes.outputs.source }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: notes
+        uses: actions/github-script@v7
+        env:
+          TAG_NAME: ${{ needs.calculate_version.outputs.next_version }}
+          PREVIOUS_TAG: ${{ needs.calculate_version.outputs.previous_version }}
+        with:
+          result-encoding: string
+          script: |
+            const tag = process.env.TAG_NAME;
+            const previous = process.env.PREVIOUS_TAG || undefined;
+
+            if (!previous) {
+              core.setOutput('source', 'bootstrap');
+              return `Initial automated release for ${tag}.`;
+            }
+
+            const response = await github.rest.repos.generateReleaseNotes({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              previous_tag_name: previous
+            });
+            core.setOutput('source', 'auto');
+            return response.data.body || `Automated release notes for ${tag}`;
+
+      - name: Ensure release does not already exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.calculate_version.outputs.next_version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Release ${VERSION} already exists. Bump the version or remove the existing release before rerunning." >&2
+            exit 1
+          fi
+          if gh api "repos/${REPOSITORY}/git/refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Git tag ${VERSION} already exists. Delete the tag or bump the version before rerunning." >&2
+            exit 1
+          fi
+
+      - name: Publish release
+        id: publish
+        env:
+          VERSION: ${{ needs.calculate_version.outputs.next_version }}
+          NOTES: ${{ steps.notes.outputs.result }}
+          NOTES_OVERRIDE: ${{ needs.validate_inputs.outputs.notes_override }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          notes_body="${NOTES}"
+          if [ -n "${NOTES_OVERRIDE}" ]; then
+            notes_body="${NOTES_OVERRIDE}"
+          fi
+
+          notes_file=$(mktemp)
+          printf '%s\n' "${notes_body}" >"${notes_file}"
+
+          gh release create "${VERSION}" --target "${GITHUB_SHA}" --notes-file "${notes_file}" --latest
+
+          release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${VERSION}"
+          printf 'release_url=%s\n' "${release_url}" >>"${GITHUB_OUTPUT}"
+          echo "::notice::Release available at ${release_url}"
+          rm -f "${notes_file}"
+
+  build_and_push:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    needs:
+      - validate_inputs
+      - calculate_version
+      - create_release
+    outputs:
+      image_digest: ${{ steps.build.outputs.digest }}
+      build_duration_seconds: ${{ steps.duration.outputs.seconds }}
+      image_size_bytes: ${{ steps.image_info.outputs.size_bytes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Docker BuildKit
+        run: echo "DOCKER_BUILDKIT=1" >>"${GITHUB_ENV}"
+
+      - name: Set build start timestamp
+        run: echo "BUILD_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        id: ghcr-login
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure GHCR login succeeded
+        if: steps.ghcr-login.outcome != 'success'
+        run: |
+          echo "::error::Failed to authenticate with GHCR. Confirm the workflow token has packages:write and contents:write scopes and that the repository permits package publishing." >&2
+          echo "::error::If this repository is part of an organization, verify Actions can publish to ghcr.io/hgnc/solr-client." >&2
+          exit 1
+
+      - name: Guard against tag conflicts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: solr-client
+          VERSION: ${{ needs.calculate_version.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          echo "::group::Checking existing GHCR tags"
+          response=$(gh api -H "Accept: application/vnd.github+json" \
+            "/orgs/${OWNER}/packages/container/${PACKAGE}/versions?per_page=100" 2>err.log || true)
+          if [ -s err.log ]; then
+            if grep -q '404' err.log; then
+              echo "::notice::No existing GHCR package for ${OWNER}/${PACKAGE}; skipping cleanup."
+              rm -f err.log
+              echo "::endgroup::"
+              exit 0
+            fi
+            cat err.log >&2
+            echo "::error::Unable to query GHCR package metadata." >&2
+            rm -f err.log
+            exit 1
+          fi
+          rm -f err.log
+          ids=$(printf '%s' "${response}" | jq --arg tag "${VERSION}" -r '.[] | select(.metadata.container.tags[]? == $tag) | .id')
+          if [ -n "${ids}" ]; then
+            echo "::warning::Existing GHCR entries found for ${VERSION}; removing to avoid tag conflicts."
+            while IFS= read -r id; do
+              [ -z "${id}" ] && continue
+              gh api -X DELETE "/orgs/${OWNER}/packages/container/${PACKAGE}/versions/${id}"
+              echo "::notice::Removed GHCR package version ${id} tagged ${VERSION}."
+            done <<<"${ids}"
+          else
+            echo "::notice::No conflicting GHCR tags detected for ${VERSION}."
+          fi
+          echo "::endgroup::"
+
+      - name: Prepare build metadata
+        id: build_meta
+        run: |
+          printf 'created=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >>"${GITHUB_OUTPUT}"
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./solr-client
+          file: ./solr-client/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE_REPOSITORY }}:${{ needs.calculate_version.outputs.next_version }}
+            ${{ env.IMAGE_REPOSITORY }}:latest
+            ${{ env.IMAGE_REPOSITORY }}:release
+          cache-from: type=gha,scope=solr-client
+          cache-to: type=gha,scope=solr-client,mode=max
+          build-args: |
+            NODE_ENV=production
+            BUILD_VERSION=${{ needs.calculate_version.outputs.next_version }}
+            BUILD_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ steps.build_meta.outputs.created }}
+          labels: |
+            org.opencontainers.image.source=${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.calculate_version.outputs.next_version }}
+            org.opencontainers.image.created=${{ steps.build_meta.outputs.created }}
+
+      - name: Validate pushed tags
+        env:
+          VERSION: ${{ needs.calculate_version.outputs.next_version }}
+          METADATA: ${{ steps.build.outputs.metadata }}
+        run: |
+          set -euo pipefail
+          required_tags="${VERSION} latest release"
+          # Normalize metadata to an array of tag strings
+          tags=$(printf '%s' "${METADATA}" | jq -sr '[.[].tag]')
+          missing=""
+          for tag in ${required_tags}; do
+            present=$(printf '%s' "${tags}" | jq --arg tag "${tag}" 'map(select(. == $tag)) | length > 0')
+            if [ "${present}" != "true" ]; then
+              echo "::error::Expected container tag '${tag}' not found in build metadata." >&2
+              missing="${missing} ${tag}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing tags:${missing}" >&2
+            exit 1
+          fi
+          echo "::notice::All expected container tags are present: ${required_tags}"
+
+      - name: Record image metadata
+        id: image_info
+        env:
+          IMAGE_REF: ${{ env.IMAGE_REPOSITORY }}:${{ needs.calculate_version.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          info=$(docker buildx imagetools inspect "${IMAGE_REF}" --format '{{json .}}')
+          size=$(printf '%s' "${info}" | jq -r '
+            if (.manifest | type) == "object" and (.manifest.manifests // empty) then
+              reduce (.manifest.manifests[]?.size // 0) as $s (0; . + $s)
+            else
+              (.manifest.size // 0)
+            end')
+          if [ -z "${size}" ] || [ "${size}" = "null" ]; then
+            size=0
+          fi
+          printf 'size_bytes=%s\n' "${size}" >>"${GITHUB_OUTPUT}"
+          echo "::notice::Image size for ${IMAGE_REF}: ${size} bytes"
+
+      - name: Capture build duration
+        id: duration
+        run: |
+          end_ts=$(date +%s)
+          duration=$((end_ts - BUILD_STARTED_AT))
+          printf 'seconds=%s\n' "${duration}" >>"${GITHUB_OUTPUT}"
+
+      - name: Summarize release
+        env:
+          VERSION: ${{ needs.calculate_version.outputs.next_version }}
+          STRATEGY: ${{ needs.calculate_version.outputs.release_strategy }}
+          BOOTSTRAP: ${{ needs.calculate_version.outputs.is_bootstrap }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          RELEASE_URL: ${{ needs.create_release.outputs.release_url }}
+          DURATION: ${{ steps.duration.outputs.seconds }}
+          CREATED: ${{ steps.build_meta.outputs.created }}
+          RELEASE_TYPE: ${{ needs.validate_inputs.outputs.release_type }}
+          TRIGGER: ${{ needs.validate_inputs.outputs.trigger_type }}
+          EXPLICIT_VERSION: ${{ needs.validate_inputs.outputs.explicit_version }}
+          NOTES_OVERRIDE_STATE: ${{ needs.validate_inputs.outputs.notes_override_state }}
+          NOTES_SOURCE: ${{ needs.create_release.outputs.notes_source }}
+          IMAGE_SIZE: ${{ steps.image_info.outputs.size_bytes }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          explicit="${EXPLICIT_VERSION:-auto}"
+          if [ -z "${explicit}" ]; then
+            explicit="auto"
+          fi
+          if [ "${NOTES_OVERRIDE_STATE}" = "true" ]; then
+            notes_status="manual override"
+          else
+            notes_status="auto (${NOTES_SOURCE})"
+          fi
+          image_size_display="${IMAGE_SIZE:-0}"
+          human_size="${image_size_display}"
+          if command -v numfmt >/dev/null 2>&1 && printf '%s' "${image_size_display}" | grep -Eq '^[0-9]+$' && [ "${image_size_display}" -ne 0 ]; then
+            human_size=$(numfmt --to=iec "${image_size_display}")
+          fi
+          cat <<EOF >>"${GITHUB_STEP_SUMMARY}"
+          ## Solr Client Release Summary
+
+          - Version: ${VERSION}
+          - Release strategy: ${STRATEGY}
+          - Bootstrap run: ${BOOTSTRAP}
+          - Release type: ${RELEASE_TYPE}
+          - Trigger: ${TRIGGER}
+          - Explicit version: ${explicit}
+          - Release notes: ${notes_status}
+          - Image digest: ${DIGEST}
+          - Image size: ${image_size_display} bytes (${human_size})
+          - Release URL: ${RELEASE_URL}
+          - Build duration (s): ${DURATION}
+          - Image created: ${CREATED}
+          - Workflow run: ${RUN_URL} (attempt ${RUN_ATTEMPT})
+
+          Tags pushed:
+          - ${IMAGE_REPOSITORY}:${VERSION}
+          - ${IMAGE_REPOSITORY}:latest
+          - ${IMAGE_REPOSITORY}:release
+          EOF
+
+      - name: Emit pipeline metrics
+        run: |
+          echo "::notice::Build completed in ${{ steps.duration.outputs.seconds }}s with digest ${{ steps.build.outputs.digest }}"
+          echo "::notice::Image size: ${{ steps.image_info.outputs.size_bytes }} bytes"
+
+  finalize:
+    name: Finalize Pipeline
+    runs-on: ubuntu-latest
+    needs:
+      - validate_inputs
+      - calculate_version
+      - create_release
+      - build_and_push
+    if: always()
+    outputs:
+      release_version: ${{ steps.set_outputs.outputs.release_version }}
+      release_url: ${{ steps.set_outputs.outputs.release_url }}
+      image_digest: ${{ steps.set_outputs.outputs.image_digest }}
+      image_size_bytes: ${{ steps.set_outputs.outputs.image_size_bytes }}
+      build_duration_seconds: ${{ steps.set_outputs.outputs.build_duration_seconds }}
+    steps:
+      - name: Verify release and image alignment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.calculate_version.outputs.next_version }}
+          IMAGE_TAG: ${{ env.IMAGE_REPOSITORY }}:${{ needs.calculate_version.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          release_tag=$(gh release view "${VERSION}" --json tagName --jq '.tagName')
+          if [ -z "${release_tag}" ]; then
+            echo "::error::Unable to retrieve release tag for ${VERSION}." >&2
+            exit 1
+          fi
+          if [ "${release_tag}" != "${VERSION}" ]; then
+            echo "::error::Release tag ${release_tag} does not match expected ${VERSION}." >&2
+            exit 1
+          fi
+          echo "::notice::Verified release ${release_tag} for image ${IMAGE_TAG}."
+
+      - name: Display workflow outputs
+        run: |
+          echo "::group::Release Outputs"
+          echo "Version: ${{ needs.calculate_version.outputs.next_version }}"
+          echo "Release URL: ${{ needs.create_release.outputs.release_url }}"
+          echo "Image digest: ${{ needs.build_and_push.outputs.image_digest }}"
+          echo "Image size (bytes): ${{ needs.build_and_push.outputs.image_size_bytes }}"
+          echo "Build duration (s): ${{ needs.build_and_push.outputs.build_duration_seconds }}"
+          echo "::endgroup::"
+
+      - name: Set pipeline outputs
+        id: set_outputs
+        if: always()
+        env:
+          VERSION: ${{ needs.calculate_version.outputs.next_version }}
+          RELEASE_URL: ${{ needs.create_release.outputs.release_url }}
+          DIGEST: ${{ needs.build_and_push.outputs.image_digest }}
+          IMAGE_SIZE: ${{ needs.build_and_push.outputs.image_size_bytes }}
+          DURATION: ${{ needs.build_and_push.outputs.build_duration_seconds }}
+        run: |
+          {
+            printf 'release_version=%s\n' "${VERSION}"
+            printf 'release_url=%s\n' "${RELEASE_URL}"
+            printf 'image_digest=%s\n' "${DIGEST}"
+            printf 'image_size_bytes=%s\n' "${IMAGE_SIZE}"
+            printf 'build_duration_seconds=%s\n' "${DURATION}"
+          } >>"${GITHUB_OUTPUT}"
+
+      - name: Flag failures
+        if: ${{ needs.build_and_push.result == 'failure' || needs.create_release.result == 'failure' || needs.calculate_version.result == 'failure' }}
+        run: |
+          echo "::error::One or more release steps failed. Check logs for details."
+          exit 1
