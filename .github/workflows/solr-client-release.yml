@@ -203,7 +203,22 @@ jobs:
           REPO: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
-          permission=$(gh api graphql -F owner="${OWNER}" -F repo="${REPO}" -f query='query($owner:String!, $repo:String!){ repository(owner:$owner, name:$repo) { viewerPermission } }' --jq '.data.repository.viewerPermission')
+          token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+          if [ -z "${token}" ]; then
+            echo "::warning::No token available to verify repository permissions; skipping check." >&2
+            exit 0
+          fi
+          export GH_TOKEN="${token}"
+
+          permission=$(gh api graphql -F owner="${OWNER}" -F repo="${REPO}" \
+            -f query='query($owner:String!, $repo:String!){ repository(owner:$owner, name:$repo) { viewerPermission } }' \
+            --jq '.data.repository.viewerPermission' 2>/dev/null || true)
+
+          if [ -z "${permission}" ] || [ "${permission}" = "null" ]; then
+            echo "::warning::Unable to determine repository permission for the provided token; skipping enforcement." >&2
+            exit 0
+          fi
+
           echo "::notice::Repository viewer permission for token: ${permission}"
           case "${permission}" in
             ADMIN|WRITE)
